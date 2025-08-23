@@ -9,7 +9,7 @@ import google.generativeai as genai
 import nltk
 from nltk.corpus import words as nltk_words
 
-# --- Initialize Services (Supabase, Gemini) ---
+# --- Initialize Services ---
 load_dotenv()
 supabase_url: str = os.environ.get("SUPABASE_URL")
 supabase_key: str = os.environ.get("SUPABASE_KEY")
@@ -19,54 +19,61 @@ genai.configure(api_key=gemini_api_key)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # --- Main Script Logic ---
-
-def curate_and_add_words(limit=200):
+def curate_and_add_words(fetch_limit=1000, final_limit=200):
     print("Starting the word curation engine...")
     
-    # 1. Get all words from the NLTK corpus
+    # 1. Get words from NLTK and the database
     all_english_words = set(w.lower() for w in nltk_words.words())
-    print(f"Loaded {len(all_english_words)} words from NLTK corpus.")
-
-    # 2. Get words already in our database to avoid duplicates
     try:
         res = supabase.table('wat_words').select('word_text').execute()
         existing_words = set(item['word_text'] for item in res.data)
-        print(f"Found {len(existing_words)} words already in the database.")
+        print(f"Loaded {len(all_english_words)} words from NLTK and found {len(existing_words)} in DB.")
     except Exception as e:
-        print(f"Error fetching existing words: {e}")
         existing_words = set()
+        print(f"Could not fetch existing words: {e}")
 
-    # 3. Filter for new, suitable words
-    potential_new_words = [
+    # 2. Filter for potential new words
+    potential_words = [
         w for w in all_english_words 
         if 4 <= len(w) <= 10 and w.isalpha() and w not in existing_words
     ]
-    random.shuffle(potential_new_words)
-    words_to_process = potential_new_words[:limit]
-    print(f"Selected {len(words_to_process)} new words to categorize.")
-
-    if not words_to_process:
+    random.shuffle(potential_words)
+    words_to_filter = potential_words[:fetch_limit]
+    
+    if not words_to_filter:
         print("No new words to process. Exiting.")
         return
 
-    # 4. Use Gemini AI to categorize the new words
+    # 3. --- NEW: AI-powered filtering for common words ---
     try:
-        print("Asking Gemini API to categorize words...")
-        prompt = f"""
-        Analyze the following list of English words. For each word, categorize it as "Positive", "Negative", or "Neutral" based on its most common connotation.
+        print(f"Asking AI to filter {len(words_to_filter)} words for commonality...")
+        filter_prompt = f"""
+        From the following list of words, select only the ones that are common, easily understandable, and suitable for a psychology test. Avoid obscure, archaic, or overly technical terms. Return a JSON array of up to {final_limit} of the best words from the list.
 
         Word List:
-        {', '.join(words_to_process)}
-
-        Your Task:
-        Return a single, valid JSON object where each key is a word from the list and its value is its category string. For example:
-        {{
-            "happy": "Positive",
-            "fear": "Negative",
-            "table": "Neutral"
-        }}
+        {', '.join(words_to_filter)}
+        
+        Example Output:
+        ["happy", "table", "fear", "run", "success"]
         """
-        response = model.generate_content(prompt)
+        response = model.generate_content(filter_prompt)
+        cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
+        filtered_words = json.loads(cleaned_text)
+        print(f"AI has selected {len(filtered_words)} high-quality words.")
+    except Exception as e:
+        print(f"An error occurred during AI filtering: {e}")
+        return
+
+    # 4. Use Gemini AI to categorize the filtered words
+    try:
+        print("Asking AI to categorize the filtered words...")
+        categorize_prompt = f"""
+        Analyze the following list of English words. For each word, categorize it as "Positive", "Negative", or "Neutral" based on its most common connotation. Return a single, valid JSON object where each key is a word and its value is its category.
+        
+        Word List:
+        {', '.join(filtered_words)}
+        """
+        response = model.generate_content(categorize_prompt)
         cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
         categorized_words = json.loads(cleaned_text)
         print(f"Successfully categorized {len(categorized_words)} words.")
@@ -74,21 +81,18 @@ def curate_and_add_words(limit=200):
         print(f"An error occurred during AI categorization: {e}")
         return
 
-    # 5. Prepare data for insertion
+    # 5. Prepare and insert the final data
     words_to_insert = [
         {"word_text": word, "category": category}
         for word, category in categorized_words.items()
     ]
 
-    # 6. Insert new words into Supabase
     try:
         print(f"Inserting {len(words_to_insert)} new words into the database...")
-        data, count = supabase.table('wat_words').insert(words_to_insert).execute()
-        print("Curation complete. Database has been updated with new words.")
+        supabase.table('wat_words').insert(words_to_insert).execute()
+        print("Curation complete. Database has been updated with new, high-quality words.")
     except Exception as e:
         print(f"An error occurred during database insertion: {e}")
 
-
 if __name__ == "__main__":
-    # You can change the number to add more or fewer words at a time
-    curate_and_add_words(limit=750)
+    curate_and_add_words(fetch_limit=1000, final_limit=200)
