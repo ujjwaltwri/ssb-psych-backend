@@ -15,7 +15,9 @@ import google.generativeai as genai
 # --- Load Environment Variables & Initialize Services ---
 load_dotenv()
 app = FastAPI()
-
+@app.get("/")
+def health_check():
+    return {"status": "ok", "message": "PsychePrep API is healthy"}
 # Supabase & Gemini Clients
 supabase_url: str = os.environ.get("SUPABASE_URL")
 supabase_key: str = os.environ.get("SUPABASE_KEY")
