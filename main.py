@@ -146,3 +146,8 @@ async def analyze_session(session_id: int, current_user = Depends(get_current_us
         return {"message": "Analysis complete", "analysis": update_res.data[0]['analysis']}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {e}")
+    # Server startup
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
