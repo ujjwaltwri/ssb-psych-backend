@@ -61,15 +61,12 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
 
 # --- API Endpoints ---
-
 @app.get("/")
 def health_check():
-    """Health check endpoint for Render."""
     return {"status": "ok", "message": "PsychePrep API is healthy"}
 
 @app.get("/api/new-wat-test")
 def get_new_wat_test():
-    """Fetches a randomized set of words for a new WAT session."""
     try:
         words_res = supabase.table('wat_words').select('word_text').execute()
         words = [item['word_text'] for item in words_res.data]
@@ -80,7 +77,6 @@ def get_new_wat_test():
 
 @app.get("/api/new-srt-test")
 def get_new_srt_test():
-    """Fetches a random set of situations for a new SRT session."""
     try:
         situations_res = supabase.table('srt_situations').select('situation_text').execute()
         situations = [item['situation_text'] for item in situations_res.data]
@@ -91,7 +87,6 @@ def get_new_srt_test():
 
 @app.post("/api/save-wat-session")
 async def save_wat_session(session_data: WatSessionData, current_user = Depends(get_current_user)):
-    """Saves the results of a completed WAT session to the database."""
     try:
         responses_list = [response.dict() for response in session_data.responses]
         data_to_insert = {"user_id": current_user.id, "test_type": "WAT", "responses": responses_list}
@@ -102,7 +97,6 @@ async def save_wat_session(session_data: WatSessionData, current_user = Depends(
 
 @app.post("/api/save-srt-session")
 async def save_srt_session(session_data: SrtSessionData, current_user = Depends(get_current_user)):
-    """Saves the results of a completed SRT session to the database."""
     try:
         responses_list = [response.dict() for response in session_data.responses]
         data_to_insert = {"user_id": current_user.id, "test_type": "SRT", "responses": responses_list}
@@ -113,7 +107,6 @@ async def save_srt_session(session_data: SrtSessionData, current_user = Depends(
 
 @app.post("/api/analyze-session/{session_id}")
 async def analyze_session(session_id: int, current_user = Depends(get_current_user)):
-    """Fetches a saved session, sends it to the Gemini API for analysis, and saves the result."""
     try:
         session_res = supabase.table('test_sessions').select('responses, test_type').eq('id', session_id).eq('user_id', current_user.id).single().execute()
         if not session_res.data:
@@ -121,32 +114,36 @@ async def analyze_session(session_id: int, current_user = Depends(get_current_us
         
         responses = session_res.data['responses']
         test_type = session_res.data['test_type']
-        
+        if not any(item.get('response', '').strip() for item in responses):
+            raise HTTPException(status_code=400, detail="Cannot analyze a session with no responses.")
+
         if test_type == 'WAT':
             formatted_responses = "\n".join([f"- {item['word']}: {item['response']}" for item in responses if item['response']])
-            prompt_template = "You are an expert defense psychologist evaluating a candidate for an officer role based on their Word Association Test (WAT) responses."
+            prompt_template = "Word Association Test (WAT)"
         elif test_type == 'SRT':
             formatted_responses = "\n".join([f"- Situation: {item['situation']}\n  - Response: {item['response']}" for item in responses if item['response']])
-            prompt_template = "You are an expert defense psychologist evaluating a candidate for an officer role based on their Situation Reaction Test (SRT) responses. Analyze the candidate's reactions for problem-solving skills, responsibility, and calmness under pressure."
+            prompt_template = "Situation Reaction Test (SRT)"
         else:
             raise HTTPException(status_code=400, detail=f"Analysis for test type '{test_type}' not supported.")
 
         prompt = f"""
-        {prompt_template}
+        **ROLE:** You are a skeptical senior psychologist at a military Service Selection Board (SSB). Your job is to find weaknesses and screen out candidates who are not suitable for officer training. Your tone must be brutally honest, direct, and critical. Do not offer encouragement or praise unless it is exceptionally warranted. Focus on flaws.
 
-        **Candidate's Responses:**
+        **CONTEXT:** A candidate has completed a {prompt_template}. Their responses are provided below.
+
+        **CANDIDATE'S RESPONSES:**
         {formatted_responses}
 
-        **Your Task:**
-        Provide a deep and insightful psychological analysis.
+        **YOUR TASK:**
+        Critically analyze these responses to identify psychological weaknesses, negative thought patterns, and deficiencies in Officer Like Qualities (OLQs). For every assertion you make, you MUST quote the specific response as evidence.
 
-        **Output Format:**
+        **OUTPUT FORMAT:**
         Return your analysis as a single, valid JSON object with the following keys:
-        - "overall_summary": A brief, 2-3 sentence summary of the candidate's psychological profile.
-        - "positive_traits": A bulleted list of 3-4 key positive qualities observed.
-        - "areas_for_improvement": A bulleted list of 2-3 potential areas for the candidate to reflect upon.
-        - "olq_rating": An object rating a comprehensive set of OLQs on a scale of 1-5 (1=Low, 5=High). The keys must be exactly: "effective_intelligence", "reasoning_ability", "organizing_ability", "power_of_expression", "social_adaptability", "cooperation", "sense_of_responsibility", "initiative", "self_confidence", "speed_of_decision", "determination", "courage".
-        - "selection_potential_analysis": A candid, 2-4 sentence analysis of the candidate's selection potential based ONLY on these responses. DO NOT give a definitive 'recommended' or 'not recommended' verdict. Instead, frame it as a coach would, highlighting which thought patterns strongly align with selection standards and which patterns might be considered red flags or require immediate attention. The tone should be realistic but encouraging.
+        - "overall_summary": A blunt, 1-2 sentence assessment of the candidate's primary psychological characteristics as revealed by this test.
+        - "positive_traits": A very brief, bulleted list of any 1-2 genuinely officer-like qualities demonstrated. Be highly critical; do not list mediocre points.
+        - "areas_for_improvement": A detailed, bulleted list of the most significant psychological concerns, red flags, and weaknesses. For each point, state the issue clearly, quote the evidence, and explain why it is a concern for a military officer.
+        - "olq_rating": An object rating a comprehensive set of OLQs on a scale of 1-5 (1=Poor, 2=Below Average, 3=Average, 4=Good, 5=Excellent). Be a harsh grader. Average performance is not good enough.
+        - "final_verdict": A single, direct sentence stating whether this performance raises significant concerns about the candidate's suitability for a commission. Do not equivocate.
         """
         
         ai_response = model.generate_content(prompt)
@@ -170,5 +167,7 @@ async def analyze_session(session_id: int, current_user = Depends(get_current_us
         return {"message": "Analysis complete", "analysis": update_res.data[0]['analysis']}
 
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         print(f"A major error occurred during analysis: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred during analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
