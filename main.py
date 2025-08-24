@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List
 
 from supabase import create_client, Client
 import google.generativeai as genai
@@ -25,7 +25,6 @@ genai.configure(api_key=gemini_api_key)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # CORS Middleware
-# Add your live Vercel URL to this list
 origins = ["http://localhost:3000", "https://psycheprep.vercel.app"] 
 app.add_middleware(
     CORSMiddleware,
@@ -70,7 +69,7 @@ def health_check():
 
 @app.get("/api/new-wat-test")
 def get_new_wat_test():
-    """Fetches a balanced and randomized set of words for a new WAT session."""
+    """Fetches a randomized set of words for a new WAT session."""
     try:
         words_res = supabase.table('wat_words').select('word_text').execute()
         words = [item['word_text'] for item in words_res.data]
@@ -160,7 +159,10 @@ async def analyze_session(session_id: int, current_user = Depends(get_current_us
             print(f"Raw AI response was: {ai_response.text}")
             raise HTTPException(status_code=500, detail="The AI returned an invalid response format. Please try analyzing again.")
 
-        update_res = supabase.table('test_sessions').update({'analysis': analysis_json}).eq('id', session_id).execute()
+        update_res = supabase.table('test_sessions').update({
+            'analysis': analysis_json,
+            'responses': responses
+        }).eq('id', session_id).execute()
 
         if not update_res.data:
              raise HTTPException(status_code=500, detail="Failed to save analysis.")
